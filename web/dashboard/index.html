@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PAEA — Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230b0f14'/><text x='50' y='72' font-size='58' text-anchor='middle' font-family='sans-serif' fill='%23f0b45f'>&#9655;</text></svg>">
+<style>
+:root {
+  --bg: #0b0f14;
+  --surface: #11161d;
+  --surface-2: #182029;
+  --surface-3: #1f2a36;
+  --border: #223041;
+  --border-strong: #33465c;
+  --text: #e6edf3;
+  --dim: #8b98a9;
+  --faint: #556274;
+  --accent: #f0b45f;
+  --accent-soft: rgba(240,180,95,.12);
+  --ok: #3ecf8e;
+  --ok-soft: rgba(62,207,142,.12);
+  --warn: #f0b45f;
+  --warn-soft: rgba(240,180,95,.14);
+  --err: #ff6473;
+  --err-soft: rgba(255,100,115,.12);
+  --info: #4aa8ff;
+  --info-soft: rgba(74,168,255,.12);
+  --font: -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: radial-gradient(1000px 400px at 85% -10%, rgba(240,180,95,.05), transparent 60%), var(--bg);
+  color: var(--text); font-family: var(--font); line-height: 1.5;
+  min-height: 100vh;
+}
+header {
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  padding:18px 26px; border-bottom:1px solid var(--border);
+  background: rgba(17,22,29,.7);
+}
+.brand { display:flex; align-items:center; gap:12px; }
+.brand .logo {
+  width:38px; height:38px; border-radius:9px; display:grid; place-items:center;
+  background: var(--accent-soft); border:1px solid rgba(240,180,95,.35); color:var(--accent);
+  font-size:17px;
+}
+.brand h1 { font-size:16px; letter-spacing:2px; font-weight:700; color:var(--accent); }
+.brand small { display:block; font-size:10px; letter-spacing:1.2px; color:var(--faint); text-transform:uppercase; }
+.pill {
+  display:inline-flex; align-items:center; gap:7px; padding:5px 12px;
+  border-radius:999px; font-family:var(--mono); font-size:11px; border:1px solid var(--border);
+}
+.pill::before { content:''; width:8px; height:8px; border-radius:50%; }
+.pill.ok { color:var(--ok); background:var(--ok-soft); }
+.pill.ok::before { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.pill.bad { color:var(--err); background:var(--err-soft); }
+.pill.bad::before { background:var(--err); box-shadow:0 0 8px var(--err); }
+.pill.neutral { color:var(--dim); }
+.pill.neutral::before { background:var(--faint); }
+.spacer { flex:1; }
+.icon-btn {
+  min-height:38px; padding:8px 16px; background:var(--surface-2); color:var(--dim);
+  border:1px solid var(--border); border-radius:9px; cursor:pointer; font-size:13px; font-weight:600;
+  transition:all .18s ease;
+}
+.icon-btn:hover { color:var(--text); border-color:var(--border-strong); }
+main { padding:24px 26px 60px; max-width:1200px; margin:0 auto; }
+
+/* KPI grid */
+.kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:14px; margin-bottom:26px; }
+.kpi {
+  padding:16px 18px; background:var(--surface); border:1px solid var(--border);
+  border-radius:12px;
+}
+.kpi .k-label { font-family:var(--mono); font-size:9px; letter-spacing:2px; color:var(--faint); text-transform:uppercase; }
+.kpi .k-value { font-size:28px; font-weight:800; margin-top:6px; letter-spacing:-.02em; }
+.k-value.ok { color:var(--ok); } .k-value.warn { color:var(--warn); }
+.k-value.err { color:var(--err); } .k-value.info { color:var(--info); }
+.k-value.accent { color:var(--accent); }
+.kpi .k-sub { margin-top:4px; font-size:11px; color:var(--faint); font-family:var(--mono); }
+
+/* Run task */
+.run-box {
+  display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;
+  padding:18px; background:var(--surface); border:1px solid var(--border); border-radius:12px; margin-bottom:26px;
+}
+.run-box label { font-family:var(--mono); font-size:9px; letter-spacing:2px; color:var(--faint); text-transform:uppercase; display:block; margin-bottom:6px; }
+.run-box input {
+  flex:1; min-width:280px; min-height:40px; padding:9px 13px; background:var(--surface-2);
+  border:1px solid var(--border); border-radius:9px; color:var(--text); font-size:13.5px; outline:none;
+  font-family:var(--font);
+}
+.run-box input:focus { border-color:var(--accent); }
+.run-btn {
+  min-height:40px; padding:9px 20px; background:var(--accent); color:#14100a; border:1px solid var(--accent);
+  border-radius:9px; font-weight:700; cursor:pointer; font-size:13px; transition:all .18s ease;
+}
+.run-btn:hover { background:#ffc877; }
+.run-btn:disabled { opacity:.55; cursor:not-allowed; }
+
+/* Tables */
+section.panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:26px; }
+section.panel h2 {
+  font-family:var(--mono); font-size:10px; letter-spacing:2px; color:var(--dim);
+  text-transform:uppercase; padding:14px 18px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+section.panel h2 .count { color:var(--accent); }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead th {
+  text-align:left; padding:10px 18px; font-family:var(--mono); font-size:9px; letter-spacing:1.5px;
+  color:var(--faint); text-transform:uppercase; border-bottom:1px solid var(--border); font-weight:500;
+}
+tbody td { padding:11px 18px; border-bottom:1px solid var(--border); vertical-align:top; }
+tbody tr:hover { background:var(--surface-2); }
+tbody tr:last-child td { border-bottom:none; }
+.mono { font-family:var(--mono); }
+.muted { color:var(--dim); }
+.truncate { max-width:340px; }
+.cell-id { font-family:var(--mono); font-size:11px; color:var(--accent); }
+.badge {
+  display:inline-flex; align-items:center; gap:6px; padding:2px 9px; border-radius:6px;
+  font-family:var(--mono); font-size:9px; letter-spacing:1px; text-transform:uppercase;
+}
+.badge::before { content:''; width:5px; height:5px; border-radius:50%; }
+.b-completed { background:var(--ok-soft); color:var(--ok); } .b-completed::before { background:var(--ok); }
+.b-healed { background:var(--warn-soft); color:var(--warn); } .b-healed::before { background:var(--warn); }
+.b-failed { background:var(--err-soft); color:var(--err); } .b-failed::before { background:var(--err); }
+.b-running { background:var(--info-soft); color:var(--info); } .b-running::before { background:var(--info); }
+.b-pending { background:var(--surface-3); color:var(--dim); } .b-pending::before { background:var(--faint); }
+.b-unknown { background:var(--surface-3); color:var(--dim); } .b-unknown::before { background:var(--faint); }
+.num { font-family:var(--mono); font-size:12px; font-weight:700; }
+.num.ok { color:var(--ok); } .num.err { color:var(--err); }
+
+.empty { text-align:center; padding:36px 20px; color:var(--faint); font-size:13px; }
+.last-updated { margin-top:-14px; margin-bottom:26px; text-align:right; font-family:var(--mono); font-size:10px; color:var(--faint); }
+#toast {
+  position:fixed; right:22px; bottom:22px; z-index:50;
+  background:var(--surface-2); border:1px solid var(--border-strong); border-left:3px solid var(--accent);
+  border-radius:10px; padding:12px 18px; font-size:13px; color:var(--text);
+  box-shadow:0 12px 32px rgba(0,0,0,.5); transform:translateY(16px); opacity:0; pointer-events:none;
+  transition:all .25s cubic-bezier(.22,1,.36,1); max-width:420px;
+}
+#toast.show { transform:translateY(0); opacity:1; }
+@media (max-width:700px) { .kpis { grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">▶</div>
+    <div><h1>PAEA</h1><small>Platform for Autonomous Edge Agents</small></div>
+  </div>
+  <span class="pill" id="healthPill">…</span>
+  <div class="spacer"></div>
+  <button class="icon-btn" onclick="refresh()">↻ Refresh</button>
+</header>
+
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="run-box">
+    <div style="flex:1; min-width:280px;">
+      <label for="taskInput">Ejecutar tarea</label>
+      <input id="taskInput" placeholder="ej: lista el contenido de C:\proyecto o busca sobre agentes IA">
+    </div>
+    <button class="run-btn" id="runBtn" onclick="runTask()">▶ Ejecutar</button>
+  </div>
+
+  <section class="panel">
+    <h2>Tareas recientes <span class="count" id="taskCount"></span></h2>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Input</th><th>Estado</th><th>Agente</th><th>Creada</th></tr>
+        </thead>
+        <tbody id="tasksBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Patrones aprendidos <span class="count" id="learnCount"></span></h2>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr><th>Patrón de error</th><th>Fix aplicado</th><th>Éxitos</th><th>Fallos</th></tr>
+        </thead>
+        <tbody id="learningsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="last-updated">última actualización: <span id="updatedAt">—</span> · <span id="dbPath" class="muted"></span></div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+const API = ''; // endpoints relativos: /api/status, /api/tasks, /api/learnings
+const $ = id => document.getElementById(id);
+let toastTimer = null;
+
+function toast(msg, ok) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.style.borderLeftColor = ok ? 'var(--ok)' : 'var(--err)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+async function fetchJSON(url, opts) {
+  const res = await fetch(API + url, opts);
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); msg = j.error || j.detail || msg; } catch (_) {}
+    throw new Error(msg || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+function badge(status) {
+  const s = String(status || 'unknown').toLowerCase();
+  const map = { completed: 'ok', healed: 'ok', failed: 'err', running: 'info', pending: 'neutral' };
+  return `<span class="badge b-${s}">${status || '—'}</span>`;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  return d.toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'medium' });
+}
+
+function renderStatus(status) {
+  const t = status.tasks || {};
+  const chain = status.audit_chain === 'valid';
+  const pill = $('healthPill');
+  pill.className = 'pill ' + (chain ? 'ok' : 'bad');
+  pill.innerHTML = chain ? 'AUDIT: VALID' : 'AUDIT: BROKEN';
+
+  const cards = [
+    { label: 'Tareas totales', value: t.total ?? 0, cls: 'info', sub: 'ejecutadas' },
+    { label: 'Completadas', value: t.completed ?? 0, cls: 'ok', sub: 'sin incidentes' },
+    { label: 'Healed', value: t.healed ?? 0, cls: 'warn', sub: 'auto-reparadas' },
+    { label: 'Fallidas', value: t.failed ?? 0, cls: 'err', sub: 'requieren atención' },
+    { label: 'Learnings', value: status.learnings ?? 0, cls: 'accent', sub: 'patrones registrados' },
+    { label: 'Cadena de auditoría', value: chain ? 'OK' : 'BROKEN', cls: chain ? 'ok' : 'err', sub: 'sha256 chain' },
+  ];
+  $('kpis').innerHTML = cards.map(c =>
+    `<div class="kpi"><div class="k-label">${c.label}</div><div class="k-value ${c.cls}">${c.value}</div><div class="k-sub">${c.sub}</div></div>`
+  ).join('');
+  $('dbPath').textContent = status.db_path ? 'db: ' + status.db_path : '';
+}
+
+function renderTasks(tasks) {
+  $('taskCount').textContent = '(' + tasks.length + ')';
+  const body = $('tasksBody');
+  if (!tasks.length) {
+    body.innerHTML = `<tr><td colspan="5"><div class="empty">Aún no hay tareas. Ejecuta una arriba.</div></td></tr>`;
+    return;
+  }
+  body.innerHTML = tasks.map(t => `
+    <tr>
+      <td class="cell-id">${t.id || '—'}</td>
+      <td class="truncate">${t.input || ''}</td>
+      <td>${badge(t.status)}</td>
+      <td class="mono muted">${t.agent || '—'}</td>
+      <td class="mono muted">${fmtTime(t.at)}</td>
+    </tr>`).join('');
+}
+
+function renderLearnings(learnings) {
+  $('learnCount').textContent = '(' + learnings.length + ')';
+  const body = $('learningsBody');
+  if (!learnings.length) {
+    body.innerHTML = `<tr><td colspan="4"><div class="empty">Aún no hay patrones aprendidos.</div></td></tr>`;
+    return;
+  }
+  body.innerHTML = learnings.map(l => `
+    <tr>
+      <td class="truncate">${l.pattern || ''}</td>
+      <td class="muted truncate">${l.fix || '—'}</td>
+      <td><span class="num ok">${l.success || 0}×</span></td>
+      <td><span class="num ${l.failures ? 'err' : 'muted'}">${l.failures || 0}×</span></td>
+    </tr>`).join('');
+}
+
+async function refresh() {
+  try {
+    const [status, tasks, learnings] = await Promise.all([
+      fetchJSON('/api/status'),
+      fetchJSON('/api/tasks'),
+      fetchJSON('/api/learnings')
+    ]);
+    renderStatus(status);
+    renderTasks(tasks);
+    renderLearnings(learnings);
+    $('updatedAt').textContent = new Date().toLocaleTimeString('es-ES');
+  } catch (e) {
+    $('healthPill').className = 'pill neutral';
+    $('healthPill').textContent = 'API NO DISPONIBLE';
+    toast('Error: ' + e.message, false);
+  }
+}
+
+async function runTask() {
+  const input = $('taskInput').value.trim();
+  if (!input) { toast('Escribe una tarea primero', false); return; }
+  const btn = $('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Ejecutando…';
+  try {
+    const r = await fetchJSON('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: input, context: {} })
+    });
+    const status = r.status || 'unknown';
+    const output = (r.result && r.result.output) || r.error || '';
+    toast(`[${status}] ${output.slice(0, 140)}`, status !== 'failed');
+  } catch (e) {
+    toast('Error ejecutando: ' + e.message, false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Ejecutar';
+    setTimeout(refresh, 600);
+  }
+}
+
+$('taskInput').addEventListener('keydown', e => { if (e.key === 'Enter') runTask(); });
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

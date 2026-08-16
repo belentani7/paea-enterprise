@@ -1,0 +1,2 @@
+# PAEA usa unicamente la biblioteca estandar de Python.
+# No se requieren dependencias externas para ejecutar el CLI o el servidor web.
