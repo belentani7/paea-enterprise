@@ -137,7 +137,7 @@ En PowerShell:
 
 ```powershell
 $env:PAEA_WEB_TOKEN = 'reemplazar-por-un-valor-aleatorio-largo'
-python paea.py web
+python paea.py serve
 ```
 
 Los endpoints de ejecución, tareas, aprendizaje y estado requieren la cabecera `Authorization: Bearer <token>`. `/api/health` no devuelve datos de tareas ni secretos. `/api/execute` limita cada cuerpo JSON a 64 KiB, requiere una tarea no vacía y un objeto de contexto, y ya no responde con `Access-Control-Allow-Origin: *`. No se admite acceso público directo: para uso remoto harían falta un proxy seguro con TLS, controles de red y una revisión de las capacidades de los agentes.
