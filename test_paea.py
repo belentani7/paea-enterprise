@@ -59,6 +59,23 @@ class TestAuditLedger(unittest.TestCase):
         self.conn.commit()
         self.assertFalse(self.audit.verify_chain())
 
+    def test_payload_tamper_detected_even_when_links_match(self):
+        self.audit.log("t1", "test", "original")
+        self.audit.log("t2", "other", "next")
+        self.conn.execute(
+            "UPDATE audit_log SET detail='tampered' WHERE rowid=1"
+        )
+        self.conn.commit()
+        self.assertFalse(self.audit.verify_chain())
+
+    def test_deleted_tail_not_detectable_without_external_anchor(self):
+        """Hash chains cannot detect removed suffixes without an external anchor."""
+        self.audit.log("t1", "test", "first")
+        self.audit.log("t2", "test", "second")
+        self.conn.execute("DELETE FROM audit_log WHERE rowid=2")
+        self.conn.commit()
+        self.assertTrue(self.audit.verify_chain())
+
     def test_uses_named_columns(self):
         """verify_chain no debe depender de indices posicionales."""
         self.audit.log("t1", "test", "x")
