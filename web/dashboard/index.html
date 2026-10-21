@@ -159,6 +159,14 @@ tbody tr:last-child td { border-bottom:none; }
 </header>
 
 <main>
+  <div class="run-box">
+    <div style="flex:1; min-width:260px">
+      <label for="apiToken">Token de acceso al agente</label>
+      <input id="apiToken" type="password" autocomplete="off" spellcheck="false"
+             placeholder="PAEA_WEB_TOKEN (solo memoria)" aria-label="Token para los endpoints privados">
+    </div>
+    <button class="run-btn" type="button" onclick="connectConsole()">Conectar</button>
+  </div>
   <div class="kpis" id="kpis"></div>
 
   <div class="run-box">
@@ -201,8 +209,15 @@ tbody tr:last-child td { border-bottom:none; }
 <script>
 'use strict';
 
-const API = ''; // endpoints relativos: /api/status, /api/tasks, /api/learnings
+const API = ''; // Endpoints relativos del mismo origen
 const $ = id => document.getElementById(id);
+let sessionToken = '';
+function connectConsole() {
+  sessionToken = $('apiToken').value.trim();
+  $('apiToken').value = '';
+  toast(sessionToken ? 'Token activado en esta pestaña.' : 'Debes introducir el token.', !!sessionToken);
+  if (sessionToken) void refresh();
+}
 let toastTimer = null;
 
 function toast(msg, ok) {
@@ -214,8 +229,13 @@ function toast(msg, ok) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
 }
 
-async function fetchJSON(url, opts) {
-  const res = await fetch(API + url, opts);
+async function fetchJSON(url, opts = {}) {
+  if (!sessionToken && url !== '/api/health') {
+    throw new Error('Conecta el token para acceder a datos del agente.');
+  }
+  const headers = new Headers(opts.headers || {});
+  if (url !== '/api/health') headers.set('Authorization', 'Bearer ' + sessionToken);
+  const res = await fetch(API + url, { ...opts, headers });
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); msg = j.error || j.detail || msg; } catch (_) {}
