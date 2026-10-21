@@ -168,11 +168,27 @@ def start_web_server(port: int = 8080):
     import http.server
     import urllib.parse
 
+    token = os.environ.get("PAEA_WEB_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Set PAEA_WEB_TOKEN before starting the agent web server")
+
     class PaeaHandler(http.server.BaseHTTPRequestHandler):
+        def _authorized(self):
+            supplied = self.headers.get("Authorization", "")
+            return hmac.compare_digest(supplied, "Bearer " + token)
+
+        def _require_auth(self):
+            if not self._authorized():
+                self._json_response({"error": "Unauthorized"}, 401)
+                return False
+            return True
+
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
+            if path.startswith("/api/") and path != "/api/health" and not self._require_auth():
+                return
             if path == "/" or path == "/dashboard":
                 self._serve_file("web/dashboard/index.html", "text/html")
             elif path == "/api/status":
@@ -189,9 +205,18 @@ def start_web_server(port: int = 8080):
         def do_POST(self):
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/execute":
-                content_length = int(self.headers.get("Content-Length", 0))
+                if not self._require_auth():
+                    return
                 try:
-                    body = json.loads(self.rfile.read(content_length)) if content_length else {}
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    self._json_response({"error": "Invalid content length"}, 400)
+                    return
+                if not 0 < content_length <= 65536:
+                    self._json_response({"error": "Request must contain 1..65536 bytes"}, 413)
+                    return
+                try:
+                    body = json.loads(self.rfile.read(content_length))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     self._json_response({"error": "Invalid JSON body"}, 400)
                     return
@@ -199,10 +224,14 @@ def start_web_server(port: int = 8080):
                     self._json_response({"error": "JSON body must be an object"}, 400)
                     return
                 task = body.get("task", "")
-                if not task:
-                    self._json_response({"error": "Missing 'task' field"}, 400)
+                if not isinstance(task, str) or not 1 <= len(task.strip()) <= 4000:
+                    self._json_response({"error": "Task must be 1..4000 characters"}, 400)
                     return
-                result = orchestrator.execute(task, body.get("context", {}))
+                context = body.get("context", {})
+                if not isinstance(context, dict):
+                    self._json_response({"error": "Context must be an object"}, 400)
+                    return
+                result = orchestrator.execute(task, context)
                 self._json_response(result)
             else:
                 self.send_error(404)
@@ -210,7 +239,8 @@ def start_web_server(port: int = 8080):
         def _json_response(self, data, code=200):
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(json.dumps(data, indent=2, default=str).encode())
 
@@ -227,7 +257,10 @@ def start_web_server(port: int = 8080):
         def log_message(self, format, *args):
             print(f"  [HTTP] {args[0]}")
 
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), PaeaHandler)
+    host = os.environ.get("PAEA_WEB_HOST", "127.0.0.1")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError("External binding disabled; use a secured reverse proxy instead")
+    server = http.server.ThreadingHTTPServer((host, port), PaeaHandler)
     print(f"\n  PAEA Web Server running on http://localhost:{port}")
     print(f"  Dashboard: http://localhost:{port}/dashboard")
     print(f"  API Status: http://localhost:{port}/api/status")
