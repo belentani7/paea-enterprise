@@ -15,6 +15,7 @@ import sys
 import json
 import uuid
 import hashlib
+import hmac
 import shlex
 import sqlite3
 from datetime import datetime, timezone
@@ -139,13 +140,21 @@ class AuditLedger:
     def verify_chain(self) -> bool:
         """Verifica que la cadena de hashes este intacta (sin manipulaciones)."""
         rows = self.conn.execute(
-            f"SELECT {self.COL_HASH_PREV}, {self.COL_HASH_CURRENT} FROM audit_log ORDER BY rowid"
+            "SELECT id, task_id, event_type, detail, timestamp, "
+            "hash_prev, hash_current FROM audit_log ORDER BY rowid"
         ).fetchall()
         prev_hash = "0" * 64
         for row in rows:
-            if row[self.COL_HASH_PREV] != prev_hash:
+            if row["hash_prev"] != prev_hash:
                 return False
-            prev_hash = row[self.COL_HASH_CURRENT]
+            payload = (
+                f'{row["id"]}{row["task_id"]}{row["event_type"]}'
+                f'{row["detail"]}{row["timestamp"]}{prev_hash}'
+            )
+            expected = hashlib.sha256(payload.encode()).hexdigest()
+            if not hmac.compare_digest(expected, row["hash_current"]):
+                return False
+            prev_hash = row["hash_current"]
         return True
 
 audit = AuditLedger(DB)
