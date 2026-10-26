@@ -471,7 +471,11 @@ class ExecutorAgent(Agent):
         import re
 
         # Try to read a file — detect any path with known extension
-        file_match = re.search(r'([A-Za-z]:\\[^\s]+\.(?:txt|md|py|json|html|csv|log))', prompt)
+        file_match = re.search(
+            r'(?<!\S)((?:[A-Za-z]:[\\/]|/|\./|\.\./)[^\r\n]+?\.(?:txt|md|py|json|html|csv|log))(?=\s|$)',
+            prompt,
+            re.IGNORECASE,
+        )
         if not file_match:
             file_match = re.search(r'([^\s/]+\.(?:txt|md|py|json|html|csv|log))', prompt)
         if file_match:
