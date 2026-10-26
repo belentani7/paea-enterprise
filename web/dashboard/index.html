@@ -144,6 +144,8 @@ tbody tr:last-child td { border-bottom:none; }
   transition:all .25s cubic-bezier(.22,1,.36,1); max-width:420px;
 }
 #toast.show { transform:translateY(0); opacity:1; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration:0.01ms !important; animation-duration:0.01ms !important; } }
+@media (max-width:480px) { main { padding:16px 12px 40px; } header { padding:14px 12px; } .run-box { padding:14px; } .run-box > div { min-width:0 !important; width:100%; } .run-box input { min-width:0; width:100%; } .run-btn { width:100%; } }
 @media (max-width:700px) { .kpis { grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); } }
 </style>
 </head>
@@ -204,7 +206,7 @@ tbody tr:last-child td { border-bottom:none; }
   <div class="last-updated">última actualización: <span id="updatedAt">—</span> · <span id="dbPath" class="muted"></span></div>
 </main>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 'use strict';
@@ -244,10 +246,17 @@ async function fetchJSON(url, opts = {}) {
   return res.json();
 }
 
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch]);
+}
+
 function badge(status) {
   const s = String(status || 'unknown').toLowerCase();
   const map = { completed: 'ok', healed: 'ok', failed: 'err', running: 'info', pending: 'neutral' };
-  return `<span class="badge b-${s}">${status || '—'}</span>`;
+  const css = ['completed', 'healed', 'failed', 'running', 'pending'].includes(s) ? s : 'unknown';
+  return `<span class="badge b-${css}">${escapeHTML(status || '—')}</span>`;
 }
 
 function fmtTime(iso) {
@@ -273,7 +282,7 @@ function renderStatus(status) {
     { label: 'Cadena de auditoría', value: chain ? 'OK' : 'BROKEN', cls: chain ? 'ok' : 'err', sub: 'sha256 chain' },
   ];
   $('kpis').innerHTML = cards.map(c =>
-    `<div class="kpi"><div class="k-label">${c.label}</div><div class="k-value ${c.cls}">${c.value}</div><div class="k-sub">${c.sub}</div></div>`
+    `<div class="kpi"><div class="k-label">${c.label}</div><div class="k-value ${c.cls}">${escapeHTML(c.value)}</div><div class="k-sub">${c.sub}</div></div>`
   ).join('');
   $('dbPath').textContent = status.db_path ? 'db: ' + status.db_path : '';
 }
@@ -287,11 +296,11 @@ function renderTasks(tasks) {
   }
   body.innerHTML = tasks.map(t => `
     <tr>
-      <td class="cell-id">${t.id || '—'}</td>
-      <td class="truncate">${t.input || ''}</td>
+      <td class="cell-id">${escapeHTML(t.id || '—')}</td>
+      <td class="truncate">${escapeHTML(t.input || '')}</td>
       <td>${badge(t.status)}</td>
-      <td class="mono muted">${t.agent || '—'}</td>
-      <td class="mono muted">${fmtTime(t.at)}</td>
+      <td class="mono muted">${escapeHTML(t.agent || '—')}</td>
+      <td class="mono muted">${escapeHTML(fmtTime(t.at))}</td>
     </tr>`).join('');
 }
 
@@ -304,14 +313,19 @@ function renderLearnings(learnings) {
   }
   body.innerHTML = learnings.map(l => `
     <tr>
-      <td class="truncate">${l.pattern || ''}</td>
-      <td class="muted truncate">${l.fix || '—'}</td>
-      <td><span class="num ok">${l.success || 0}×</span></td>
-      <td><span class="num ${l.failures ? 'err' : 'muted'}">${l.failures || 0}×</span></td>
+      <td class="truncate">${escapeHTML(l.pattern || '')}</td>
+      <td class="muted truncate">${escapeHTML(l.fix || '—')}</td>
+      <td><span class="num ok">${escapeHTML(l.success || 0)}×</span></td>
+      <td><span class="num ${l.failures ? 'err' : 'muted'}">${escapeHTML(l.failures || 0)}×</span></td>
     </tr>`).join('');
 }
 
 async function refresh() {
+  if (!sessionToken) {
+    $('healthPill').className = 'pill neutral';
+    $('healthPill').textContent = 'SIN CONEXIÓN';
+    return;
+  }
   try {
     const [status, tasks, learnings] = await Promise.all([
       fetchJSON('/api/status'),
