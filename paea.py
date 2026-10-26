@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import shlex
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
@@ -113,49 +114,52 @@ class AuditLedger:
     def __init__(self, conn):
         self.conn = conn
         self._last_hash = "0" * 64
+        self._lock = threading.RLock()
 
     def log(self, task_id: str, event_type: str, detail: str = "") -> str:
         """Registra un evento y devuelve el hash del nuevo bloque."""
-        row = self.conn.execute(
-            "SELECT hash_current FROM audit_log ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        self._last_hash = row[0] if row else "0" * 64
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT hash_current FROM audit_log ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            self._last_hash = row[0] if row else "0" * 64
 
-        event_id = str(uuid.uuid4())
-        ts = datetime.now(timezone.utc).isoformat()
-        payload = f"{event_id}{task_id}{event_type}{detail}{ts}{self._last_hash}"
-        hash_current = hashlib.sha256(payload.encode()).hexdigest()
+            event_id = str(uuid.uuid4())
+            ts = datetime.now(timezone.utc).isoformat()
+            payload = f"{event_id}{task_id}{event_type}{detail}{ts}{self._last_hash}"
+            hash_current = hashlib.sha256(payload.encode()).hexdigest()
 
-        self.conn.execute(
-            "INSERT INTO audit_log (id, task_id, event_type, detail, hash_prev, hash_current, timestamp) VALUES (?,?,?,?,?,?,?)",
-            (event_id, task_id, event_type, detail, self._last_hash, hash_current, ts)
-        )
-        self.conn.commit()
+            self.conn.execute(
+                "INSERT INTO audit_log (id, task_id, event_type, detail, hash_prev, hash_current, timestamp) VALUES (?,?,?,?,?,?,?)",
+                (event_id, task_id, event_type, detail, self._last_hash, hash_current, ts)
+            )
+            self.conn.commit()
 
-        if Config.LOG_LEVEL == "debug":
-            print(f"  [AUDIT] {event_type}: {detail[:80]}")
+            if Config.LOG_LEVEL == "debug":
+                print(f"  [AUDIT] {event_type}: {detail[:80]}")
 
-        return hash_current
+            return hash_current
 
     def verify_chain(self) -> bool:
         """Verifica que la cadena de hashes este intacta (sin manipulaciones)."""
-        rows = self.conn.execute(
-            "SELECT id, task_id, event_type, detail, timestamp, "
-            "hash_prev, hash_current FROM audit_log ORDER BY rowid"
-        ).fetchall()
-        prev_hash = "0" * 64
-        for row in rows:
-            if row["hash_prev"] != prev_hash:
-                return False
-            payload = (
-                f'{row["id"]}{row["task_id"]}{row["event_type"]}'
-                f'{row["detail"]}{row["timestamp"]}{prev_hash}'
-            )
-            expected = hashlib.sha256(payload.encode()).hexdigest()
-            if not hmac.compare_digest(expected, row["hash_current"]):
-                return False
-            prev_hash = row["hash_current"]
-        return True
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, task_id, event_type, detail, timestamp, "
+                "hash_prev, hash_current FROM audit_log ORDER BY rowid"
+            ).fetchall()
+            prev_hash = "0" * 64
+            for row in rows:
+                if row["hash_prev"] != prev_hash:
+                    return False
+                payload = (
+                    f'{row["id"]}{row["task_id"]}{row["event_type"]}'
+                    f'{row["detail"]}{row["timestamp"]}{prev_hash}'
+                )
+                expected = hashlib.sha256(payload.encode()).hexdigest()
+                if not hmac.compare_digest(expected, row["hash_current"]):
+                    return False
+                prev_hash = row["hash_current"]
+            return True
 
 audit = AuditLedger(DB)
 

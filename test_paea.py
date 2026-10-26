@@ -11,6 +11,8 @@ o:
     python -m unittest test_paea -v
 """
 import os
+import sqlite3
+import threading
 import shutil
 import sys
 import tempfile
@@ -48,6 +50,66 @@ class TestAuditLedger(unittest.TestCase):
         self.assertNotEqual(h1, h2)
         self.assertNotEqual(h1, "0" * 64)
         self.assertEqual(len(h1), 64)
+
+    def test_concurrent_audit_writes_preserve_hash_chain(self):
+        """Two web threads must not read the same previous audit hash."""
+        conn = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE audit_log (id TEXT, task_id TEXT, event_type TEXT, "
+            "detail TEXT, timestamp TEXT, hash_prev TEXT, hash_current TEXT)"
+        )
+        second_read = threading.Event()
+        read_lock = threading.Lock()
+        reads = 0
+
+        class InterleavedConnection:
+            def execute(self, sql, params=()):
+                cursor = conn.execute(sql, params)
+                if not sql.startswith("SELECT hash_current"):
+                    return cursor
+
+                class PausedCursor:
+                    def fetchone(self):
+                        nonlocal reads
+                        row = cursor.fetchone()
+                        with read_lock:
+                            reads += 1
+                            number = reads
+                        if number == 1:
+                            second_read.wait(timeout=0.3)
+                        elif number == 2:
+                            second_read.set()
+                        return row
+
+                return PausedCursor()
+
+            def commit(self):
+                conn.commit()
+
+        ledger = paea.AuditLedger(InterleavedConnection())
+        errors = []
+
+        def write(number):
+            try:
+                ledger.log(str(number), "concurrent", "event")
+            except Exception as exc:
+                errors.append(str(exc))
+
+        threads = [threading.Thread(target=write, args=(n,)) for n in range(2)]
+        try:
+            for worker in threads:
+                worker.start()
+            for worker in threads:
+                worker.join(timeout=3)
+            self.assertFalse(any(worker.is_alive() for worker in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0], 2)
+            self.assertTrue(ledger.verify_chain())
+        finally:
+            for worker in threads:
+                worker.join(timeout=3)
+            conn.close()
 
     def test_tamper_detected(self):
         self.audit.log("t1", "test", "detail")
