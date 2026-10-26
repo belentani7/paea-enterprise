@@ -113,6 +113,16 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIn("[FILE READ]", res)
         self.assertIn("hola desde el test", res)
 
+    def test_execute_local_action_file_read_unicode_spaces(self):
+        folder = _TMP / "carpeta con espacios"
+        folder.mkdir(exist_ok=True)
+        target = folder / "niño guía.txt"
+        target.write_text("lectura de ruta completa", encoding="utf-8")
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(f"lee el archivo {target}")
+        self.assertIn("[FILE READ]", result)
+        self.assertIn("lectura de ruta completa", result)
+
     def test_execute_local_action_count_files(self):
         d = _TMP / "countme"
         d.mkdir(exist_ok=True)
