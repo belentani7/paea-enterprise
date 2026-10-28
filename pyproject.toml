@@ -1,0 +1,6 @@
+[project]
+name = "belentani7-paea-enterprise"
+version = "0.1.0"
+description = "Factual packaging baseline[premium-factory]"
+dependencies = [
+]
