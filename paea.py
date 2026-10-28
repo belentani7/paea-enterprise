@@ -474,6 +474,22 @@ class ExecutorAgent(Agent):
         """Try to perform real actions based on the prompt."""
         import re
 
+        # Try to write/create a file
+        write_match = re.search(r'(?:escribe|write|create|crea|guarda|save)\s+(?:el\s+)?(?:archivo\s+)?([^\s]+\.(?:txt|md|py|json|html))', prompt, re.IGNORECASE)
+        if write_match:
+            filepath = write_match.group(1)
+            # Extract content between quotes or after "con contenido:" or "content:"
+            content_match = re.search(r'(?:contenido|content|texto|text)[:\s]+"([^"]+)"', prompt, re.IGNORECASE)
+            if not content_match:
+                content_match = re.search(r'```(?:\w+)?\s*\n(.*?)```', prompt, re.DOTALL)
+            if content_match:
+                content = content_match.group(1)
+                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+                Path(filepath).write_text(content, encoding="utf-8")
+                return f"[FILE CREATED] {filepath} ({len(content)} chars)"
+            else:
+                raise ValueError(f"No content provided for file creation: {filepath}")
+
         # Try to read a file — detect any path with known extension
         file_match = re.search(
             r'(?<!\S)((?:[A-Za-z]:[\\/]|/|\./|\.\./)[^\r\n]+?\.(?:txt|md|py|json|html|csv|log))(?=\s|$)',
@@ -528,22 +544,6 @@ class ExecutorAgent(Agent):
             if dirpath.exists():
                 count = sum(1 for _ in dirpath.rglob("*") if _.is_file())
                 return f"[COUNT] {dirpath}: {count} files"
-
-        # Try to write/create a file
-        write_match = re.search(r'(?:escribe|write|create|crea|guarda|save)\s+(?:el\s+)?(?:archivo\s+)?([^\s]+\.(?:txt|md|py|json|html))', prompt, re.IGNORECASE)
-        if write_match:
-            filepath = write_match.group(1)
-            # Extract content between quotes or after "con contenido:" or "content:"
-            content_match = re.search(r'(?:contenido|content|texto|text)[:\s]+"([^"]+)"', prompt, re.IGNORECASE)
-            if not content_match:
-                content_match = re.search(r'```(?:\w+)?\s*\n(.*?)```', prompt, re.DOTALL)
-            if content_match:
-                content = content_match.group(1)
-                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-                Path(filepath).write_text(content, encoding="utf-8")
-                return f"[FILE CREATED] {filepath} ({len(content)} chars)"
-            else:
-                raise ValueError(f"No content provided for file creation: {filepath}")
 
         # Try to search the web
         search_match = re.search(r'(?:busca|search|google|investiga|research)\s+(.+)', prompt, re.IGNORECASE)

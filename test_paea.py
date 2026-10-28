@@ -185,6 +185,29 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIn("[FILE READ]", result)
         self.assertIn("lectura de ruta completa", result)
 
+    def test_create_file_action_not_misclassified_as_read(self):
+        """Create must reach the write handler instead of failing file lookup."""
+        target = _TMP / "factory_new_note.txt"
+        if target.exists():
+            target.unlink()
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(
+            f'crea archivo {target} con contenido: "contenido nuevo"'
+        )
+        self.assertTrue(result.startswith("[FILE CREATED]"), result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "contenido nuevo")
+
+    def test_write_existing_file_action_not_misclassified_as_read(self):
+        """Explicit write replaces a file instead of returning its old contents."""
+        target = _TMP / "factory_existing_note.txt"
+        target.write_text("anterior", encoding="utf-8")
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(
+            f'write {target} content: "actualizado"'
+        )
+        self.assertTrue(result.startswith("[FILE CREATED]"), result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "actualizado")
+
     def test_execute_local_action_count_files(self):
         d = _TMP / "countme"
         d.mkdir(exist_ok=True)
