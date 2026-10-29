@@ -14,3 +14,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m compileall -q .
+      - run: python -m unittest -v test_paea
+      - run: node --version && node --test tests/dashboard-security.test.cjs

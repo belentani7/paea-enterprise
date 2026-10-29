@@ -11,6 +11,8 @@ o:
     python -m unittest test_paea -v
 """
 import os
+import sqlite3
+import threading
 import shutil
 import sys
 import tempfile
@@ -49,6 +51,66 @@ class TestAuditLedger(unittest.TestCase):
         self.assertNotEqual(h1, "0" * 64)
         self.assertEqual(len(h1), 64)
 
+    def test_concurrent_audit_writes_preserve_hash_chain(self):
+        """Two web threads must not read the same previous audit hash."""
+        conn = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE audit_log (id TEXT, task_id TEXT, event_type TEXT, "
+            "detail TEXT, timestamp TEXT, hash_prev TEXT, hash_current TEXT)"
+        )
+        second_read = threading.Event()
+        read_lock = threading.Lock()
+        reads = 0
+
+        class InterleavedConnection:
+            def execute(self, sql, params=()):
+                cursor = conn.execute(sql, params)
+                if not sql.startswith("SELECT hash_current"):
+                    return cursor
+
+                class PausedCursor:
+                    def fetchone(self):
+                        nonlocal reads
+                        row = cursor.fetchone()
+                        with read_lock:
+                            reads += 1
+                            number = reads
+                        if number == 1:
+                            second_read.wait(timeout=0.3)
+                        elif number == 2:
+                            second_read.set()
+                        return row
+
+                return PausedCursor()
+
+            def commit(self):
+                conn.commit()
+
+        ledger = paea.AuditLedger(InterleavedConnection())
+        errors = []
+
+        def write(number):
+            try:
+                ledger.log(str(number), "concurrent", "event")
+            except Exception as exc:
+                errors.append(str(exc))
+
+        threads = [threading.Thread(target=write, args=(n,)) for n in range(2)]
+        try:
+            for worker in threads:
+                worker.start()
+            for worker in threads:
+                worker.join(timeout=3)
+            self.assertFalse(any(worker.is_alive() for worker in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0], 2)
+            self.assertTrue(ledger.verify_chain())
+        finally:
+            for worker in threads:
+                worker.join(timeout=3)
+            conn.close()
+
     def test_tamper_detected(self):
         self.audit.log("t1", "test", "detail")
         self.audit.log("t2", "test2", "other")
@@ -58,6 +120,23 @@ class TestAuditLedger(unittest.TestCase):
         )
         self.conn.commit()
         self.assertFalse(self.audit.verify_chain())
+
+    def test_payload_tamper_detected_even_when_links_match(self):
+        self.audit.log("t1", "test", "original")
+        self.audit.log("t2", "other", "next")
+        self.conn.execute(
+            "UPDATE audit_log SET detail='tampered' WHERE rowid=1"
+        )
+        self.conn.commit()
+        self.assertFalse(self.audit.verify_chain())
+
+    def test_deleted_tail_not_detectable_without_external_anchor(self):
+        """Hash chains cannot detect removed suffixes without an external anchor."""
+        self.audit.log("t1", "test", "first")
+        self.audit.log("t2", "test", "second")
+        self.conn.execute("DELETE FROM audit_log WHERE rowid=2")
+        self.conn.commit()
+        self.assertTrue(self.audit.verify_chain())
 
     def test_uses_named_columns(self):
         """verify_chain no debe depender de indices posicionales."""
@@ -95,6 +174,39 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertIn("[FILE READ]", res)
         self.assertIn("hola desde el test", res)
+
+    def test_execute_local_action_file_read_unicode_spaces(self):
+        folder = _TMP / "carpeta con espacios"
+        folder.mkdir(exist_ok=True)
+        target = folder / "niño guía.txt"
+        target.write_text("lectura de ruta completa", encoding="utf-8")
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(f"lee el archivo {target}")
+        self.assertIn("[FILE READ]", result)
+        self.assertIn("lectura de ruta completa", result)
+
+    def test_create_file_action_not_misclassified_as_read(self):
+        """Create must reach the write handler instead of failing file lookup."""
+        target = _TMP / "factory_new_note.txt"
+        if target.exists():
+            target.unlink()
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(
+            f'crea archivo {target} con contenido: "contenido nuevo"'
+        )
+        self.assertTrue(result.startswith("[FILE CREATED]"), result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "contenido nuevo")
+
+    def test_write_existing_file_action_not_misclassified_as_read(self):
+        """Explicit write replaces a file instead of returning its old contents."""
+        target = _TMP / "factory_existing_note.txt"
+        target.write_text("anterior", encoding="utf-8")
+        agent = paea.ExecutorAgent()
+        result = agent._try_local_action(
+            f'write {target} content: "actualizado"'
+        )
+        self.assertTrue(result.startswith("[FILE CREATED]"), result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "actualizado")
 
     def test_execute_local_action_count_files(self):
         d = _TMP / "countme"

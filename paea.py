@@ -15,8 +15,10 @@ import sys
 import json
 import uuid
 import hashlib
+import hmac
 import shlex
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
@@ -112,41 +114,52 @@ class AuditLedger:
     def __init__(self, conn):
         self.conn = conn
         self._last_hash = "0" * 64
+        self._lock = threading.RLock()
 
     def log(self, task_id: str, event_type: str, detail: str = "") -> str:
         """Registra un evento y devuelve el hash del nuevo bloque."""
-        row = self.conn.execute(
-            "SELECT hash_current FROM audit_log ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        self._last_hash = row[0] if row else "0" * 64
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT hash_current FROM audit_log ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            self._last_hash = row[0] if row else "0" * 64
 
-        event_id = str(uuid.uuid4())
-        ts = datetime.now(timezone.utc).isoformat()
-        payload = f"{event_id}{task_id}{event_type}{detail}{ts}{self._last_hash}"
-        hash_current = hashlib.sha256(payload.encode()).hexdigest()
+            event_id = str(uuid.uuid4())
+            ts = datetime.now(timezone.utc).isoformat()
+            payload = f"{event_id}{task_id}{event_type}{detail}{ts}{self._last_hash}"
+            hash_current = hashlib.sha256(payload.encode()).hexdigest()
 
-        self.conn.execute(
-            "INSERT INTO audit_log (id, task_id, event_type, detail, hash_prev, hash_current, timestamp) VALUES (?,?,?,?,?,?,?)",
-            (event_id, task_id, event_type, detail, self._last_hash, hash_current, ts)
-        )
-        self.conn.commit()
+            self.conn.execute(
+                "INSERT INTO audit_log (id, task_id, event_type, detail, hash_prev, hash_current, timestamp) VALUES (?,?,?,?,?,?,?)",
+                (event_id, task_id, event_type, detail, self._last_hash, hash_current, ts)
+            )
+            self.conn.commit()
 
-        if Config.LOG_LEVEL == "debug":
-            print(f"  [AUDIT] {event_type}: {detail[:80]}")
+            if Config.LOG_LEVEL == "debug":
+                print(f"  [AUDIT] {event_type}: {detail[:80]}")
 
-        return hash_current
+            return hash_current
 
     def verify_chain(self) -> bool:
         """Verifica que la cadena de hashes este intacta (sin manipulaciones)."""
-        rows = self.conn.execute(
-            f"SELECT {self.COL_HASH_PREV}, {self.COL_HASH_CURRENT} FROM audit_log ORDER BY rowid"
-        ).fetchall()
-        prev_hash = "0" * 64
-        for row in rows:
-            if row[self.COL_HASH_PREV] != prev_hash:
-                return False
-            prev_hash = row[self.COL_HASH_CURRENT]
-        return True
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, task_id, event_type, detail, timestamp, "
+                "hash_prev, hash_current FROM audit_log ORDER BY rowid"
+            ).fetchall()
+            prev_hash = "0" * 64
+            for row in rows:
+                if row["hash_prev"] != prev_hash:
+                    return False
+                payload = (
+                    f'{row["id"]}{row["task_id"]}{row["event_type"]}'
+                    f'{row["detail"]}{row["timestamp"]}{prev_hash}'
+                )
+                expected = hashlib.sha256(payload.encode()).hexdigest()
+                if not hmac.compare_digest(expected, row["hash_current"]):
+                    return False
+                prev_hash = row["hash_current"]
+            return True
 
 audit = AuditLedger(DB)
 
@@ -159,11 +172,27 @@ def start_web_server(port: int = 8080):
     import http.server
     import urllib.parse
 
+    token = os.environ.get("PAEA_WEB_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Set PAEA_WEB_TOKEN before starting the agent web server")
+
     class PaeaHandler(http.server.BaseHTTPRequestHandler):
+        def _authorized(self):
+            supplied = self.headers.get("Authorization", "")
+            return hmac.compare_digest(supplied, "Bearer " + token)
+
+        def _require_auth(self):
+            if not self._authorized():
+                self._json_response({"error": "Unauthorized"}, 401)
+                return False
+            return True
+
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
 
+            if path.startswith("/api/") and path != "/api/health" and not self._require_auth():
+                return
             if path == "/" or path == "/dashboard":
                 self._serve_file("web/dashboard/index.html", "text/html")
             elif path == "/api/status":
@@ -180,9 +209,18 @@ def start_web_server(port: int = 8080):
         def do_POST(self):
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/execute":
-                content_length = int(self.headers.get("Content-Length", 0))
+                if not self._require_auth():
+                    return
                 try:
-                    body = json.loads(self.rfile.read(content_length)) if content_length else {}
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    self._json_response({"error": "Invalid content length"}, 400)
+                    return
+                if not 0 < content_length <= 65536:
+                    self._json_response({"error": "Request must contain 1..65536 bytes"}, 413)
+                    return
+                try:
+                    body = json.loads(self.rfile.read(content_length))
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     self._json_response({"error": "Invalid JSON body"}, 400)
                     return
@@ -190,10 +228,14 @@ def start_web_server(port: int = 8080):
                     self._json_response({"error": "JSON body must be an object"}, 400)
                     return
                 task = body.get("task", "")
-                if not task:
-                    self._json_response({"error": "Missing 'task' field"}, 400)
+                if not isinstance(task, str) or not 1 <= len(task.strip()) <= 4000:
+                    self._json_response({"error": "Task must be 1..4000 characters"}, 400)
                     return
-                result = orchestrator.execute(task, body.get("context", {}))
+                context = body.get("context", {})
+                if not isinstance(context, dict):
+                    self._json_response({"error": "Context must be an object"}, 400)
+                    return
+                result = orchestrator.execute(task, context)
                 self._json_response(result)
             else:
                 self.send_error(404)
@@ -201,7 +243,8 @@ def start_web_server(port: int = 8080):
         def _json_response(self, data, code=200):
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(json.dumps(data, indent=2, default=str).encode())
 
@@ -218,7 +261,10 @@ def start_web_server(port: int = 8080):
         def log_message(self, format, *args):
             print(f"  [HTTP] {args[0]}")
 
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), PaeaHandler)
+    host = os.environ.get("PAEA_WEB_HOST", "127.0.0.1")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError("External binding disabled; use a secured reverse proxy instead")
+    server = http.server.ThreadingHTTPServer((host, port), PaeaHandler)
     print(f"\n  PAEA Web Server running on http://localhost:{port}")
     print(f"  Dashboard: http://localhost:{port}/dashboard")
     print(f"  API Status: http://localhost:{port}/api/status")
@@ -428,8 +474,28 @@ class ExecutorAgent(Agent):
         """Try to perform real actions based on the prompt."""
         import re
 
+        # Try to write/create a file
+        write_match = re.search(r'(?:escribe|write|create|crea|guarda|save)\s+(?:el\s+)?(?:archivo\s+)?([^\s]+\.(?:txt|md|py|json|html))', prompt, re.IGNORECASE)
+        if write_match:
+            filepath = write_match.group(1)
+            # Extract content between quotes or after "con contenido:" or "content:"
+            content_match = re.search(r'(?:contenido|content|texto|text)[:\s]+"([^"]+)"', prompt, re.IGNORECASE)
+            if not content_match:
+                content_match = re.search(r'```(?:\w+)?\s*\n(.*?)```', prompt, re.DOTALL)
+            if content_match:
+                content = content_match.group(1)
+                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+                Path(filepath).write_text(content, encoding="utf-8")
+                return f"[FILE CREATED] {filepath} ({len(content)} chars)"
+            else:
+                raise ValueError(f"No content provided for file creation: {filepath}")
+
         # Try to read a file — detect any path with known extension
-        file_match = re.search(r'([A-Za-z]:\\[^\s]+\.(?:txt|md|py|json|html|csv|log))', prompt)
+        file_match = re.search(
+            r'(?<!\S)((?:[A-Za-z]:[\\/]|/|\./|\.\./)[^\r\n]+?\.(?:txt|md|py|json|html|csv|log))(?=\s|$)',
+            prompt,
+            re.IGNORECASE,
+        )
         if not file_match:
             file_match = re.search(r'([^\s/]+\.(?:txt|md|py|json|html|csv|log))', prompt)
         if file_match:
@@ -478,22 +544,6 @@ class ExecutorAgent(Agent):
             if dirpath.exists():
                 count = sum(1 for _ in dirpath.rglob("*") if _.is_file())
                 return f"[COUNT] {dirpath}: {count} files"
-
-        # Try to write/create a file
-        write_match = re.search(r'(?:escribe|write|create|crea|guarda|save)\s+(?:el\s+)?(?:archivo\s+)?([^\s]+\.(?:txt|md|py|json|html))', prompt, re.IGNORECASE)
-        if write_match:
-            filepath = write_match.group(1)
-            # Extract content between quotes or after "con contenido:" or "content:"
-            content_match = re.search(r'(?:contenido|content|texto|text)[:\s]+"([^"]+)"', prompt, re.IGNORECASE)
-            if not content_match:
-                content_match = re.search(r'```(?:\w+)?\s*\n(.*?)```', prompt, re.DOTALL)
-            if content_match:
-                content = content_match.group(1)
-                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-                Path(filepath).write_text(content, encoding="utf-8")
-                return f"[FILE CREATED] {filepath} ({len(content)} chars)"
-            else:
-                raise ValueError(f"No content provided for file creation: {filepath}")
 
         # Try to search the web
         search_match = re.search(r'(?:busca|search|google|investiga|research)\s+(.+)', prompt, re.IGNORECASE)

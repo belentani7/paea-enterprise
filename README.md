@@ -127,3 +127,19 @@ robustez de subprocess y esquema de la DB. Los tests usan una base temporal
 - Tabla `consents` para registrar consentimientos explícitos con jurisdicción
   (default EU).
 - No se registran secretos; las API keys van por variables de entorno.
+
+
+## Web API: protección necesaria
+
+La interfaz y los endpoints privados funcionan **únicamente en loopback** (`127.0.0.1`). Para iniciar la interfaz web se necesita `PAEA_WEB_TOKEN`, un token aleatorio largo. Si no está configurado, el servidor se niega a arrancar. La consola solicita ese token al abrirse y lo guarda únicamente en la memoria de la pestaña, no en `localStorage`.
+
+En PowerShell:
+
+```powershell
+$env:PAEA_WEB_TOKEN = 'reemplazar-por-un-valor-aleatorio-largo'
+python paea.py serve
+```
+
+Los endpoints de ejecución, tareas, aprendizaje y estado requieren la cabecera `Authorization: Bearer <token>`. `/api/health` no devuelve datos de tareas ni secretos. `/api/execute` limita cada cuerpo JSON a 64 KiB, requiere una tarea no vacía y un objeto de contexto, y ya no responde con `Access-Control-Allow-Origin: *`. No se admite acceso público directo: para uso remoto harían falta un proxy seguro con TLS, controles de red y una revisión de las capacidades de los agentes.
+
+La verificación de cadena de auditoría ahora calcula de nuevo el SHA-256 de cada evento, además de comprobar sus enlaces. **No demuestra integridad absoluta:** borrar la cola del registro completo puede pasar desapercibido sin publicar periódicamente una raíz de hash firmada en un sistema externo. Para usos de alta seguridad hay que implementar ese anclaje.
